@@ -13,3 +13,8 @@
 
 .idea/
 *.log
+
+cmd/main.go
+
+go.sum
+go.mod

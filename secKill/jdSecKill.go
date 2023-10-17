@@ -15,6 +15,7 @@ import (
 	"github.com/zqijzqj/mtSecKill/chromedpEngine"
 	"github.com/zqijzqj/mtSecKill/global"
 	"github.com/zqijzqj/mtSecKill/logs"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -48,7 +49,7 @@ type jdSecKill struct {
 	IsOk        bool
 	StartTime   time.Time
 	DiffTime    int64
-	PayPwd string
+	PayPwd      string
 }
 
 func NewJdSecKill(execPath string, skuId string, num, works int) *jdSecKill {
@@ -135,17 +136,24 @@ func (jsk *jdSecKill) GetReq(reqUrl string, params map[string]string, referer st
 }
 
 func (jsk *jdSecKill) SyncJdTime() {
-	resp, err := http.Get("https://a.jd.com//ajax/queryServerData.html")
+	resp, err := http.Get("https://a.jd.com/ajax/queryServerData.html")
 	if err != nil {
 		logs.PrintErr(err)
 		os.Exit(0)
 		return
 	}
 	defer resp.Body.Close()
-	b, _ := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		println(err)
+	}
+	//println(string(b))
 	r := gjson.ParseBytes(b)
+	println(r.Int())
 	jdTimeUnix := r.Get("serverTime").Int()
+	println(jdTimeUnix)
 	jsk.DiffTime = global.UnixMilli() - jdTimeUnix
+	jsk.DiffTime = 0
 	logs.PrintlnInfo("服务器与本地时间差为: ", jsk.DiffTime, "ms")
 }
 
@@ -207,7 +215,7 @@ func FormatJdResponse(b []byte, prefix string, isConvertStr bool) gjson.Result {
 	return gjson.Parse(r)
 }
 
-//初始化监听请求数据
+// 初始化监听请求数据
 func (jsk *jdSecKill) InitActionFunc() chromedp.ActionFunc {
 	return func(ctx context.Context) error {
 		jsk.bCtx = ctx
@@ -246,6 +254,8 @@ func (jsk *jdSecKill) Run() error {
 					logs.PrintErr("浏览器被关闭，退出进程")
 					return nil
 				default:
+					time.Sleep(100 * time.Millisecond)
+					logs.Println("scan the VR code to register...")
 				}
 				if jsk.isLogin {
 					logs.PrintlnSuccess(jsk.UserInfo.Get("realName").String() + ", 登陆成功........")
@@ -257,6 +267,7 @@ func (jsk *jdSecKill) Run() error {
 		jsk.GetEidAndFp(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			u := "https://item.jd.com/" + jsk.SkuId + ".html"
+			logs.Println("item waiting to be bought link is ", u)
 			rand.Seed(time.Now().UnixNano())
 			_ = chromedp.Navigate(u).Do(ctx)
 			for i := 0; i < jsk.Works; i++ {
@@ -264,14 +275,14 @@ func (jsk *jdSecKill) Run() error {
 					jsk.WaitStart()
 					for {
 						jsk.FetchSecKillUrl()
-						logs.PrintlnInfo("正在访问抢购连接......")
+						logs.PrintlnInfo("visiting purchase link...")
 						_, err := jsk.GetReq(jsk.SecKillUrl, nil, "https://item.jd.com/"+jsk.SkuId+".html", jsk.bCtx, true)
 						//这里访问会响应302 禁止重定向后就会是空数据 所以这里空数据是正常的
 						if err == nil || err.Error() == ErrEmptyData.Error() {
 							break
 						}
 					}
-					SecKillRE:
+				SecKillRE:
 					//请求抢购连接，提交订单
 					err := jsk.ReqSubmitSecKillOrder(jsk.bCtx)
 					if err != nil {
@@ -297,6 +308,7 @@ func (jsk *jdSecKill) Run() error {
 
 func (jsk *jdSecKill) WaitStart() {
 	st := jsk.StartTime.UnixNano() / 1e6
+	println("current time: ", st)
 	logs.PrintlnInfo("等待时间到达" + jsk.StartTime.Format(global.DateTimeFormatStr) + "...... 请勿关闭浏览器")
 	for {
 		select {
@@ -308,13 +320,14 @@ func (jsk *jdSecKill) WaitStart() {
 			return
 		default:
 		}
-		d := global.UnixMilli()-jsk.DiffTime
+		d := global.UnixMilli() - jsk.DiffTime
+		logs.Println("diff time: ", d, "ms")
 		if d >= st {
 			logs.PrintlnInfo("时间到达。。。。开始执行", time.Now().Format(global.DateTimeFormatStr))
 			break
 		}
-		if st - d - 4 > 0 {
-			time.Sleep(time.Duration(st - d - 4) * time.Millisecond)
+		if st-d-4 > 0 {
+			time.Sleep(time.Duration(st-d-4) * time.Millisecond)
 		}
 	}
 }
@@ -356,13 +369,13 @@ func (jsk *jdSecKill) GetEidAndFp() chromedp.ActionFunc {
 		info, _ := target.GetTargetInfo().Do(ctx)
 		if strings.Contains(info.URL, "cart.jd.com/cart_index") {
 			logs.PrintlnInfo("Click, common-submit-btn")
-			_ = chromedp.Sleep(1 * time.Second).Do(ctx);
+			_ = chromedp.Sleep(1 * time.Second).Do(ctx)
 			_ = chromedp.Click(".common-submit-btn").Do(ctx)
 		} else {
 			logs.PrintlnInfo("Click, submit-btn")
 			_ = chromedp.WaitVisible("container", chromedp.ByID).Do(ctx)
-			_ = chromedp.ScrollIntoView(".submit-btn").Do(ctx);
-			_ = chromedp.Sleep(1 * time.Second).Do(ctx);
+			_ = chromedp.ScrollIntoView(".submit-btn").Do(ctx)
+			_ = chromedp.Sleep(1 * time.Second).Do(ctx)
 			_ = chromedp.Click(".submit-btn").Do(ctx)
 		}
 
@@ -398,7 +411,7 @@ func (jsk *jdSecKill) GetEidAndFp() chromedp.ActionFunc {
 func (jsk *jdSecKill) FetchSecKillUrl() {
 	/*jsk.SecKillUrl = "https://marathon.jd.com/captcha.html?skuId="+jsk.SkuId+"&sn=c3f4ececd8461f0e4d7267e96a91e0e0&from=pc"
 	return*/
-	logs.PrintlnInfo("开始获取抢购连接.....")
+	logs.PrintlnInfo("start to get purchase link.....")
 	for {
 		if jsk.SecKillUrl != "" {
 			break
@@ -418,11 +431,12 @@ func (jsk *jdSecKill) ReqSubmitSecKillOrder(ctx context.Context) error {
 		ctx = jsk.bCtx
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			logs.PrintErr(r)
-		}
-	}()
+	/*	defer func() {
+			if r := recover(); r != nil {
+				logs.PrintErr(r)
+			}
+		}()
+	*/
 	//这里修改为直接使用http请求访问抢购结算页面 提高速度
 	skUrl := fmt.Sprintf("https://marathon.jd.com/seckill/seckill.action?skuId=%s&num=%d&rid=%d", jsk.SkuId, jsk.SecKillNum, time.Now().Unix())
 	logs.PrintlnInfo("访问抢购订单结算页面......", skUrl)
@@ -469,11 +483,11 @@ func (jsk *jdSecKill) ReqSubmitSecKillOrder(ctx context.Context) error {
 
 func (jsk *jdSecKill) GetOrderReqData() url.Values {
 	logs.PrintlnInfo("生成订单所需参数...")
-	defer func() {
+	/*defer func() {
 		if f := recover(); f != nil {
 			logs.PrintErr("订单参数错误：", f)
 		}
-	}()
+	}()*/
 
 	addressList := jsk.SecKillInfo.Get("addressList").Array()
 	var defaultAddress gjson.Result
@@ -561,11 +575,14 @@ func (jsk *jdSecKill) GetSecKillInitInfo(ctx context.Context) error {
 }
 
 func (jsk *jdSecKill) GetSecKillUrl() string {
-	r, _ := jsk.GetReq("https://itemko.jd.com/itemShowBtn", map[string]string{
+	r, err := jsk.GetReq("https://itemko.jd.com/itemShowBtn", map[string]string{
 		"callback": "jQuery" + strconv.FormatInt(global.GenerateRangeNum(1000000, 9999999), 10),
 		"skuId":    jsk.SkuId,
 		"from":     "pc",
 		"_":        strconv.FormatInt(time.Now().Unix()*1000, 10),
 	}, "https://item.jd.com/"+jsk.SkuId+".html", nil, false)
+	if err != nil {
+		logs.PrintErr("get itemShowBtn error: ", err)
+	}
 	return r.Get("url").String()
 }
